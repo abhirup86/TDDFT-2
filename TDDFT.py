@@ -136,7 +136,7 @@ class TDDFT(object):
     def get_Hartree_potential(self,occupation):
         """ 
         return numpy array of Hartree potential in real space at each k-point of full Brillioun zone
-        ocuupation: numpy array N_band X N_kpoint (reduced Brillioun zone) of occupation of Kohn-Sham orbitals
+        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbitals
         """ 
         density=self.get_density(occupation)
         VH=np.zeros(self.shape)
@@ -146,11 +146,19 @@ class TDDFT(object):
         return 4*np.pi*self.pdH.ifft(nG/G2)
     
     def get_coloumb_potential(self,q):
+        """
+        return coloumb potential in plane wave space V= 4 pi /(|q+G|**2)
+        q: [qx,qy,qz] vector in units of reciprocal space
+        """
         G=self.pdF.get_reciprocal_vectors()+np.dot(q,self.icell)
         G2=np.linalg.norm(G,axis=1)**2;G2[G2==0]=np.inf
         return 4*np.pi/G2  
     
     def get_Hartree_matrix(self,occupation=None):
+        """
+        return numpy array [N_kpoint X N_band X N_band] of Hartree potential matrix elements
+        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        """
         VH=self.get_Hartree_potential(occupation)
         VH_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         VH_matrix=operator_matrix_periodic(VH_matrix,VH,self.unk.conj(),self.unk)*self.norm
@@ -158,6 +166,10 @@ class TDDFT(object):
         return VH_matrix
     
     def get_Fock_matrix(self,occupation=None):
+        """
+        return numpy array [N_kpoint X N_band X N_band] of Fock potential matrix elements
+        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        """
         if occupation is None:
             occupation=np.zeros((self.NK,self.nbands))
             for k in range(self.NK):
@@ -175,6 +187,10 @@ class TDDFT(object):
         return VF_matrix
     
     def get_LDA_exchange_matrix(self,occupation=None):
+        """
+        return numpy array [N_kpoint X N_band X N_band] of LDA exchange potential matrix elements
+        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        """
         density=self.get_density(occupation)
         exchange=(3/np.pi*density)**(1./3.)
         LDAx_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
