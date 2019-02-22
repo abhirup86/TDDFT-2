@@ -1,5 +1,6 @@
 import numba
 import numpy as np
+import xc
 from ase.units import Hartree, Bohr
 from itertools import product
 from gpaw.wavefunctions.pw import PWDescriptor
@@ -192,10 +193,22 @@ class TDDFT(object):
         occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
         """
         density=self.get_density(occupation)
-        exchange=(3/np.pi*density)**(1./3.)
+        exchange=xc.VLDAx(density)
         LDAx_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         LDAx_matrix=operator_matrix_periodic(LDAx_matrix,exchange,self.unk.conj(),self.unk)*self.norm
         LDAx_matrix=np.round(LDAx_matrix,8)
         return LDAx_matrix
+    
+    def get_LDA_correlation_matrix(self,occupation=None):
+        """
+        return numpy array [N_kpoint X N_band X N_band] of LDA correlation potential matrix elements
+        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        """
+        density=self.get_density(occupation)
+        correlation=xc.VLDAc(density)
+        LDAc_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
+        LDAc_matrix=operator_matrix_periodic(LDAc_matrix,correlation,self.unk.conj(),self.unk)*self.norm
+        LDAc_matrix=np.round(LDAc_matrix,8)
+        return LDAc_matrix
     
     
