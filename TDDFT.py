@@ -46,8 +46,7 @@ class TDDFT(object):
         
         self.wk=calc.get_k_point_weights() # weight of reduced Brillioun zone
         
-        self.EK=[calc.get_eigenvalues(k) for k in range(self.NK)] # bands energy
-        self.EK=np.array(self.EK)/Hartree
+       
         
         self.nvalence=int(calc.occupations.nvalence/2) #number of valence bands
         if nbands is None:
@@ -55,6 +54,8 @@ class TDDFT(object):
         else:
             self.nbands=nbands+self.nvalence
         
+        self.EK=[calc.get_eigenvalues(k)[:self.nbands] for k in range(self.NK)] # bands energy
+        self.EK=np.array(self.EK)/Hartree
         self.shape=tuple(calc.get_number_of_grid_points()) # shape of real space grid
         self.density=calc.get_pseudo_density()*Bohr**3 # density at zero time
         
@@ -179,7 +180,6 @@ class TDDFT(object):
             
         occupation=np.sum(np.abs(wavefunction)**2,axis=2)
         occupation=occupation/(1+np.exp(self.EK/self.temperature))
-        
         K=self.calc.get_bz_k_points();NK=K.shape[0]  
         NG=self.pdF.get_reciprocal_vectors().shape[0]
         V=np.zeros((self.NK,NK,NG))
