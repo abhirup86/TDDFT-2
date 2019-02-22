@@ -20,14 +20,13 @@ def operator_matrix_periodic(matrix,operator,wf_conj,wf):
 @numba.jit(nopython=True,parallel=True,fastmath=True)
 def Fock_matrix(matrix,V,M_conj,M,occupation,ibz_map):
     """perform integration of periodic part of Kohn Sham wavefunction"""
-    nbands=matrix.shape[1]
-    NK=V.shape[0]
-    NKF=V.shape[1]
-    for k in numba.prange(NK):
-        for n1 in range(nbands):
-            for q in range(NKF):
-                for m in range(nbands):
-                    matrix[k,n1,n1]+=np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n1,ibz_map[q],k])
+    nbands=matrix.shape[1];NK=V.shape[0];NKF=V.shape[1]
+    for q in numba.prange(NKF):
+        for m in range(nbands):
+            for k in range(NK):
+                for n1 in range(nbands):
+                    for n2 in range(nbands):
+                        matrix[k,n1,n1]+=np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n2,ibz_map[q],k])
     matrix/=NKF
     return matrix
 
@@ -131,7 +130,7 @@ class TDDFT(object):
             density=np.zeros(self.shape,dtype=np.float)
             for k in range(self.NK):
                 for n in range(self.nbands):
-                    density+=occupation[n,k]*self.unk[n,k]*self.wk[k]
+                    density+=occupation[n,k]*np.abs(self.unk[n,k])**2*self.wk[k]
             return density
     
     def get_Hartree_potential(self,occupation):
