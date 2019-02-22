@@ -14,7 +14,7 @@ def operator_matrix_periodic(matrix,operator,wf_conj,wf):
     for k in numba.prange(NK):
         for n1 in range(nbands):
             for n2 in range(nbands):
-                matrix[k,n1,n2]=np.sum(operator*wf_conj[n1,k]*wf[n2,k])
+                matrix[k,n1,n2]=np.sum(operator*wf_conj[k,n1]*wf[k,n2])
     return matrix
 
 @numba.jit(nopython=True,parallel=True,fastmath=True)
@@ -26,7 +26,7 @@ def Fock_matrix(matrix,V,M_conj,M,occupation,ibz_map):
             for k in range(NK):
                 for n1 in range(nbands):
                     for n2 in range(nbands):
-                        matrix[k,n1,n1]+=np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n2,ibz_map[q],k])
+                        matrix[k,n1,n2]+=np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n2,ibz_map[q],k])
     matrix/=NKF
     return matrix
 
@@ -60,13 +60,13 @@ class TDDFT(object):
         
         
         # array of u_nk (periodic part of Kohn-Sham orbitals,only reduced Brillion zone)
-        self.unk=np.zeros((self.nbands,self.NK,)+self.shape,dtype=np.complex) 
+        self.ukn=np.zeros((self.NK,self.nbands,)+self.shape,dtype=np.complex) 
         for k in range(self.NK):
             kpt = calc.wfs.kpt_u[k]
             for n in range(self.nbands):
                 psit_G = kpt.psit_nG[n]
                 psit_R = calc.wfs.pd.ifft(psit_G, kpt.q)
-                self.unk[n,k]=psit_R 
+                self.ukn[k,n]=psit_R 
                 
         self.icell=2.0 * np.pi * calc.wfs.gd.icell_cv # inverse cell 
         self.cell = calc.wfs.gd.cell_cv # cell
@@ -93,7 +93,7 @@ class TDDFT(object):
             n1,k1=indexes[i1]
             for i2 in range(i1,len(indexes)):
                 n2,k2=indexes[i1]
-                self.M[n1,n2,k1,k2]=self.pdF.fft(self.unk[n1,k1].conj()*self.unk[n2,k2])
+                self.M[n1,n2,k1,k2]=self.pdF.fft(self.ukn[k1,n1].conj()*self.ukn[k2,n2])
                 self.M[n2,n1,k2,k1]=self.M[n1,n2,k1,k2].conj()
         self.M*=calc.wfs.gd.dv
         
@@ -105,8 +105,7 @@ class TDDFT(object):
         """ 
         if type(k)==int:
             return self.calc.wfs.gd.plane_wave(self.K[k])
-        else:
-            return self.calc.wfs.gd.plane_wave(k)
+        return self.calc.wfs.gd.plane_wave(k)
     
     
     def get_dipole_matrix(self):
@@ -115,30 +114,33 @@ class TDDFT(object):
         """ 
         
         dipole=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        dipole=operator_matrix_periodic(dipole,self.z,self.unk.conj(),self.unk)*self.norm
+        dipole=operator_matrix_periodic(dipole,self.z,self.ukn.conj(),self.ukn)*self.norm
         dipole=np.round(dipole,8)
         return dipole
     
-    def get_density(self,occupation):
+    def get_density(self,wavefunction):
         """ 
         return numpy array of electron density in real space at each k-point of full Brillioun zone
-        ocuupation: numpy array N_band X N_kpoint (reduced Brillioun zone) of occupation of Kohn-Sham orbitals
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """ 
-        if occupation is None:
+        if wavefunction is None:
             return self.density
-        else:
-            density=np.zeros(self.shape,dtype=np.float)
-            for k in range(self.NK):
-                for n in range(self.nbands):
-                    density+=occupation[n,k]*np.abs(self.unk[n,k])**2*self.wk[k]
-            return density
+        
+        occupation=np.sum(np.abs(wavefunction)**2,axis=2)
+        occupation=occupation/(1+np.exp(self.EK/self.temperature))
+        
+        density=np.zeros(self.shape,dtype=np.float)
+        for k in range(self.NK):
+            for n in range(self.nbands):
+                density+=occupation[k,n]*np.abs(self.ukn[k,n])**2*self.wk[k]
+        return density
     
-    def get_Hartree_potential(self,occupation):
+    def get_Hartree_potential(self,wavefunction):
         """ 
         return numpy array of Hartree potential in real space at each k-point of full Brillioun zone
-        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbitals
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """ 
-        density=self.get_density(occupation)
+        density=self.get_density(wavefunction)
         VH=np.zeros(self.shape)
         G=self.pdH.get_reciprocal_vectors()
         G2=np.linalg.norm(G,axis=1)**2;G2[G2==0]=np.inf
@@ -154,59 +156,63 @@ class TDDFT(object):
         G2=np.linalg.norm(G,axis=1)**2;G2[G2==0]=np.inf
         return 4*np.pi/G2  
     
-    def get_Hartree_matrix(self,occupation=None):
+    def get_Hartree_matrix(self,wavefunction=None):
         """
         return numpy array [N_kpoint X N_band X N_band] of Hartree potential matrix elements
-        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """
-        VH=self.get_Hartree_potential(occupation)
+        VH=self.get_Hartree_potential(wavefunction)
         VH_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        VH_matrix=operator_matrix_periodic(VH_matrix,VH,self.unk.conj(),self.unk)*self.norm
+        VH_matrix=operator_matrix_periodic(VH_matrix,VH,self.ukn.conj(),self.ukn)*self.norm
         VH_matrix=np.round(VH_matrix,8)
         return VH_matrix
     
-    def get_Fock_matrix(self,occupation=None):
+    def get_Fock_matrix(self,wavefunction=None):
         """
         return numpy array [N_kpoint X N_band X N_band] of Fock potential matrix elements
-        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """
-        if occupation is None:
-            occupation=np.zeros((self.NK,self.nbands))
+        if wavefunction is None:
+            wavefunction=np.zeros((self.NK,self.nbands,self.nbands))
             for k in range(self.NK):
-                for n in range(self.nbands):
-                    occupation[k,n]=1/(1+np.exp(self.EK[k,n]/self.temperature))
-       
+                wavefunction[k]=np.eye(self.nbands)
+            
+        occupation=np.sum(np.abs(wavefunction)**2,axis=2)
+        occupation=occupation/(1+np.exp(self.EK/self.temperature))
+        
         K=self.calc.get_bz_k_points();NK=K.shape[0]  
         NG=self.pdF.get_reciprocal_vectors().shape[0]
         V=np.zeros((self.NK,NK,NG))
         for k in range(self.NK):
             for q in range(NK):
-                V[k,q]=self.get_coloumb_potential(K[q]-self.K[k])
+                kq=K[q]-self.K[k]
+                kq[kq>0.5]-=1;kq[kq<=-0.5]+=1
+                V[k,q]=self.get_coloumb_potential(kq)
         VF_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)        
         VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,occupation,self.calc.get_bz_to_ibz_map())
         return VF_matrix
     
-    def get_LDA_exchange_matrix(self,occupation=None):
+    def get_LDA_exchange_matrix(self,wavefunction=None):
         """
         return numpy array [N_kpoint X N_band X N_band] of LDA exchange potential matrix elements
-        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """
-        density=self.get_density(occupation)
+        density=self.get_density(wavefunction)
         exchange=xc.VLDAx(density)
         LDAx_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        LDAx_matrix=operator_matrix_periodic(LDAx_matrix,exchange,self.unk.conj(),self.unk)*self.norm
+        LDAx_matrix=operator_matrix_periodic(LDAx_matrix,exchange,self.ukn.conj(),self.ukn)*self.norm
         LDAx_matrix=np.round(LDAx_matrix,8)
         return LDAx_matrix
     
-    def get_LDA_correlation_matrix(self,occupation=None):
+    def get_LDA_correlation_matrix(self,wavefunction=None):
         """
         return numpy array [N_kpoint X N_band X N_band] of LDA correlation potential matrix elements
-        occupation: numpy array [N_kpoint X N_band] of occupation of Kohn-Sham orbital
+        wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """
-        density=self.get_density(occupation)
+        density=self.get_density(wavefunction)
         correlation=xc.VLDAc(density)
         LDAc_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        LDAc_matrix=operator_matrix_periodic(LDAc_matrix,correlation,self.unk.conj(),self.unk)*self.norm
+        LDAc_matrix=operator_matrix_periodic(LDAc_matrix,correlation,self.ukn.conj(),self.ukn)*self.norm
         LDAc_matrix=np.round(LDAc_matrix,8)
         return LDAc_matrix
     
