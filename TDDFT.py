@@ -121,7 +121,6 @@ class TDDFT(object):
         
         dipole=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         dipole=operator_matrix_periodic(dipole,self.z,self.ukn.conj(),self.ukn)*self.norm
-        dipole=np.round(dipole,8)
         return dipole
     
     def get_density(self,wavefunction):
@@ -168,7 +167,6 @@ class TDDFT(object):
         VH=self.get_Hartree_potential(wavefunction)
         VH_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         VH_matrix=operator_matrix_periodic(VH_matrix,VH,self.ukn.conj(),self.ukn)*self.norm
-        VH_matrix=np.round(VH_matrix,8)
         return VH_matrix
     
     def get_Fock_matrix(self,wavefunction=None):
@@ -203,7 +201,6 @@ class TDDFT(object):
         exchange=xc.VLDAx(density)
         LDAx_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         LDAx_matrix=operator_matrix_periodic(LDAx_matrix,exchange,self.ukn.conj(),self.ukn)*self.norm
-        LDAx_matrix=np.round(LDAx_matrix,8)
         return LDAx_matrix
     
     def get_LDA_correlation_matrix(self,wavefunction=None):
@@ -215,7 +212,6 @@ class TDDFT(object):
         correlation=xc.VLDAc(density)
         LDAc_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         LDAc_matrix=operator_matrix_periodic(LDAc_matrix,correlation,self.ukn.conj(),self.ukn)*self.norm
-        LDAc_matrix=np.round(LDAc_matrix,8)
         return LDAc_matrix
     
     
