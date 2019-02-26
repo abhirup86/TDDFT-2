@@ -31,7 +31,7 @@ def Fock_matrix(matrix,V,M_conj,M,occupation,ibz_map):
                 for k in range(NK):
                     for n1 in range(nbands):
                         for n2 in range(nbands):
-                            matrix[k,n1,n2]+=np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n2,ibz_map[q],k])
+                            matrix[k,n1,n2]+=2*np.sum(occupation[ibz_map[q],m]*V[k,q]*M_conj[m,n1,ibz_map[q],k]*M[m,n2,ibz_map[q],k])
     matrix/=NKF
     return matrix
 
@@ -100,6 +100,9 @@ class TDDFT(object):
                 self.M[n2,n1,k2,k1]=self.M[n1,n2,k1,k2].conj()
         self.M*=calc.wfs.gd.dv
         
+        #Fermi-Dirac distribution
+        self.f=1/(1+np.exp(self.EK/self.temperature))
+        
     def plane_wave(self,k):
         """ 
         return plane wave defined on real space grid:
@@ -129,13 +132,11 @@ class TDDFT(object):
         if wavefunction is None:
             return self.density
         
-        occupation=np.sum(np.abs(wavefunction)**2,axis=2)
-        occupation=occupation/(1+np.exp(self.EK/self.temperature))
-        
         density=np.zeros(self.shape,dtype=np.float)
         for k in range(self.NK):
             for n in range(self.nbands):
-                density+=occupation[k,n]*np.abs(self.ukn[k,n])**2*self.wk[k]
+                for m in range(self.nbands):
+                    density+=2*self.wk[k]*self.f[k,n]*np.abs(wavefunction[k,m,n]*self.ukn[k,m])**2
         return density
     
     def get_Hartree_potential(self,wavefunction):
