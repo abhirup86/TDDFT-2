@@ -180,9 +180,6 @@ class TDDFT(object):
             wavefunction=np.zeros((self.NK,self.nbands,self.nbands))
             for k in range(self.NK):
                 wavefunction[k]=np.eye(self.nbands)
-            
-        occupation=np.sum(np.abs(wavefunction)**2,axis=2)
-        occupation=occupation/(1+np.exp(self.EK/self.temperature))
         K=self.calc.get_bz_k_points();NK=K.shape[0]  
         NG=self.pdF.get_reciprocal_vectors().shape[0]
         V=np.zeros((self.NK,NK,NG))
@@ -192,7 +189,9 @@ class TDDFT(object):
                 kq[kq>0.5]-=1;kq[kq<=-0.5]+=1
                 V[k,q]=self.get_coloumb_potential(kq)
         VF_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)        
-        VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,occupation,self.calc.get_bz_to_ibz_map())
+        VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,
+                              np.sum(np.abs(wavefunction)**2,axis=2)*self.f,
+                              self.calc.get_bz_to_ibz_map())
         return VF_matrix
     
     def get_LDA_exchange_matrix(self,wavefunction=None):
