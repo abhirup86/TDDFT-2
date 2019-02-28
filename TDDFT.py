@@ -45,8 +45,9 @@ class TDDFT(object):
         
     """
     
-    def __init__(self,calc,nbands=None):
+    def __init__(self,calc,nbands=None,Fock=False):
         self.calc=calc # GPAW calculator object
+        self.Fock=Fock
         self.K=calc.get_ibz_k_points() # reduced Brillioun zone
         self.NK=self.K.shape[0] 
         
@@ -92,17 +93,18 @@ class TDDFT(object):
         self.temperature=calc.occupations.width
         
         #calculate pair-density matrices
-        self.M=np.zeros((self.nbands,self.nbands,
-                         self.NK,self.NK,
-                         self.pdF.get_reciprocal_vectors().shape[0]),dtype=np.complex)
-        indexes=[(n,k) for n,k in product(range(self.nbands),range(self.NK))]
-        for i1 in range(len(indexes)):
-            n1,k1=indexes[i1]
-            for i2 in range(i1,len(indexes)):
-                n2,k2=indexes[i1]
-                self.M[n1,n2,k1,k2]=self.pdF.fft(self.ukn[k1,n1].conj()*self.ukn[k2,n2])
-                self.M[n2,n1,k2,k1]=self.M[n1,n2,k1,k2].conj()
-        self.M*=calc.wfs.gd.dv
+        if Fock:
+            self.M=np.zeros((self.nbands,self.nbands,
+                             self.NK,self.NK,
+                             self.pdF.get_reciprocal_vectors().shape[0]),dtype=np.complex)
+            indexes=[(n,k) for n,k in product(range(self.nbands),range(self.NK))]
+            for i1 in range(len(indexes)):
+                n1,k1=indexes[i1]
+                for i2 in range(i1,len(indexes)):
+                    n2,k2=indexes[i1]
+                    self.M[n1,n2,k1,k2]=self.pdF.fft(self.ukn[k1,n1].conj()*self.ukn[k2,n2])
+                    self.M[n2,n1,k2,k1]=self.M[n1,n2,k1,k2].conj()
+            self.M*=calc.wfs.gd.dv
         
         #Fermi-Dirac distribution
         self.f=1/(1+np.exp((self.EK-self.Fermi)/self.temperature))
@@ -113,7 +115,7 @@ class TDDFT(object):
         G=self.pdH.get_reciprocal_vectors()
         G2=np.linalg.norm(G,axis=1)**2;G2[G2==0]=np.inf
         matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        for k in range(self.NK):
+        for k in tqdm(range(self.NK)):
             for n in range(self.nbands):
                 density=2*np.abs(self.ukn[k,n])**2
                 operator=xc.VLDAx(density)
@@ -124,6 +126,16 @@ class TDDFT(object):
                 density=self.pdH.fft(density)
                 operator=4*np.pi*self.pdH.ifft(density/G2)  
                 self.Hartree_elements[k,n]=operator_matrix_periodic(matrix,operator,self.ukn.conj(),self.ukn)*self.norm
+        
+        self.wavefunction=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
+        self.Kinetic=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
+        self.dipole=self.get_dipole_matrix()
+        for k in range(self.NK):
+            self.wavefunction[k]=np.eye(self.nbands)
+            self.Kinetic[k]=np.diag(self.EK[k])
+        self.VH0=self.fast_Hartree_matrix(self.wavefunction)
+        self.VLDAc0=self.fast_LDA_correlation_matrix(self.wavefunction)
+        self.VLDAx0=self.fast_LDA_exchange_matrix(self.wavefunction)
         
     def plane_wave(self,k):
         """ 
@@ -140,7 +152,7 @@ class TDDFT(object):
         """ 
         return two-dimensional numpy complex array of dipole matrix elements(
         """ 
-        
+        direction/=np.linalg.norm(direction)
         dipole=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
         r=np.array(sum([self.r[i]*direction[i] for i in range(3)]))
         dipole=operator_matrix_periodic(dipole,r,self.ukn.conj(),self.ukn)*self.norm
@@ -198,21 +210,22 @@ class TDDFT(object):
         return numpy array [N_kpoint X N_band X N_band] of Fock potential matrix elements
         wavefunction: numpy array [N_kpoint X N_band X N_band] of wavefunction in basis of Kohn-Sham orbital
         """
-        if wavefunction is None:
-            wavefunction=np.zeros((self.NK,self.nbands,self.nbands))
+        VF_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)     
+        if self.Fock:
+            if wavefunction is None:
+                wavefunction=np.zeros((self.NK,self.nbands,self.nbands))
+                for k in range(self.NK):
+                    wavefunction[k]=np.eye(self.nbands)
+            K=self.calc.get_bz_k_points();NK=K.shape[0]  
+            NG=self.pdF.get_reciprocal_vectors().shape[0]
+            V=np.zeros((self.NK,NK,NG))
             for k in range(self.NK):
-                wavefunction[k]=np.eye(self.nbands)
-        K=self.calc.get_bz_k_points();NK=K.shape[0]  
-        NG=self.pdF.get_reciprocal_vectors().shape[0]
-        V=np.zeros((self.NK,NK,NG))
-        for k in range(self.NK):
-            for q in range(NK):
-                kq=K[q]-self.K[k]
-                V[k,q]=self.get_coloumb_potential(kq)
-        VF_matrix=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)        
-        VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,
-                              self.calc.get_bz_to_ibz_map(),self.nvalence)
-        
+                for q in range(NK):
+                    kq=K[q]-self.K[k]
+                    V[k,q]=self.get_coloumb_potential(kq)
+
+            VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,
+                                  self.calc.get_bz_to_ibz_map(),self.nvalence)
         return VF_matrix/self.volume
     
     def get_LDA_exchange_matrix(self,wavefunction=None):
@@ -238,7 +251,7 @@ class TDDFT(object):
         return LDAc_matrix
     
     def occupation(self,wavefunction):
-        return 2*self.wk[:,None]*self.f*np.sum(np.abs(wavefunction)**2,axis=2)
+        return 2*self.wk[:,None]*np.sum(self.f[:,None,:]*np.abs(wavefunction)**2,axis=2)
     
     def fast_Hartree_matrix(self,wavefunction):
         return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.Hartree_elements)
@@ -250,31 +263,28 @@ class TDDFT(object):
         return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.LDAx_elements)
     
     def propagate(self,dt,steps,E,operator,corrections=10):
-        wavefunction=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
-        H=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
-        dipole=self.get_dipole_matrix()
+        self.wavefunction=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
         for k in range(self.NK):
-            wavefunction[k]=np.eye(self.nbands)
-            H[k]=np.diag(self.EK[k])
-        VH0=self.fast_Hartree_matrix(wavefunction)
-        VLDAc0=self.fast_LDA_correlation_matrix(wavefunction)
-        VLDAx0=self.fast_LDA_exchange_matrix(wavefunction)
-        
-        operator_macro=np.zeros(steps,dtype=np.complex)
+            self.wavefunction[k]=np.eye(self.nbands)
+        H=np.copy(self.Kinetic)
+        operator_macro=np.array([operator[k].diagonal() for k in range(self.NK)])
+        result=np.zeros((steps,self.nbands),dtype=np.complex)
+        self.macro_dipole=np.zeros(steps,dtype=np.complex)
         for t in tqdm(range(steps)):
-            wavefunction_next=np.copy(wavefunction)
+            wavefunction_next=np.copy(self.wavefunction)
             for i in range(corrections):
-                H_next = self.fast_Hartree_matrix(wavefunction)-VH0
-                H_next+=self.fast_LDA_correlation_matrix(wavefunction)-VLDAc0
-                H_next+=self.fast_LDA_exchange_matrix(wavefunction)-VLDAx0
-                H_next+=E[t]*dipole
+                H_next =self.Kinetic+E[t]*self.dipole
+                H_next+=self.fast_Hartree_matrix(wavefunction_next)-self.VH0
+                H_next+=self.fast_LDA_correlation_matrix(wavefunction_next)-self.VLDAc0
+                H_next+=self.fast_LDA_exchange_matrix(wavefunction_next)-self.VLDAx0
+                
                 H_mid = 0.5*(H + H_next) 
                 for k in range(self.NK):
                     H_left = np.eye(self.nbands)+0.5j*dt*H_mid[k]            
                     H_right= np.eye(self.nbands)-0.5j*dt*H_mid[k]
-                    wavefunction_next[k]=linalg.solve(H_left, H_right@wavefunction[k])
-                wavefunction=np.copy(wavefunction_next)            
+                    wavefunction_next[k]=linalg.solve(H_left, H_right@wavefunction_next[k])  
+                self.wavefunction=np.copy(wavefunction_next)      
                 H = np.copy(H_next)
-            for k in range(self.NK):
-                operator_macro[t]+=2*self.wk[k]*np.sum(self.f[k]*(wavefunction[k].T.conj()@operator@wavefunction[k]).diagonal())
-        return operator_macro
+            result[t]=np.sum(self.occupation(self.wavefunction),axis=0)
+            self.macro_dipole[t]=np.sum(self.occupation(self.wavefunction)*operator_macro)
+        return result
