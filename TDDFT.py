@@ -46,7 +46,6 @@ class TDDFT(object):
     """
     
     def __init__(self,calc,nbands=None,Fock=False):
-        self.calc=calc # GPAW calculator object
         self.Fock=Fock
         self.K=calc.get_ibz_k_points() # reduced Brillioun zone
         self.NK=self.K.shape[0] 
@@ -79,7 +78,7 @@ class TDDFT(object):
         self.r[2]-=self.cell[2,2]/2.
         self.volume = np.abs(np.linalg.det(calc.wfs.gd.cell_cv)) # volume of cell
         self.norm=calc.wfs.gd.dv # 
-        self.Fermi=self.calc.get_fermi_level()/Hartree #Fermi level
+        self.Fermi=calc.get_fermi_level()/Hartree #Fermi level
         
         #desriptors at q=gamma for Hartree
         self.kdH=KPointDescriptor([[0,0,0]]) 
@@ -137,15 +136,8 @@ class TDDFT(object):
         self.VLDAc0=self.fast_LDA_correlation_matrix(self.wavefunction)
         self.VLDAx0=self.fast_LDA_exchange_matrix(self.wavefunction)
         
-    def plane_wave(self,k):
-        """ 
-        return plane wave defined on real space grid:
-        if k is integer wave vector defined as k-th k-point of reduced Brillioun zone
-        if k is array wave vector defined as np.dot(k,self.icell)
-        """ 
-        if type(k)==int:
-            return self.calc.wfs.gd.plane_wave(self.K[k])
-        return self.calc.wfs.gd.plane_wave(k)
+        self.Full_BZ=calc.get_bz_k_points()
+        self.IBZ_map=calc.get_bz_to_ibz_map()
     
     
     def get_dipole_matrix(self,direction=[0,0,1]):
@@ -183,7 +175,7 @@ class TDDFT(object):
         G=self.pdH.get_reciprocal_vectors()
         G2=np.linalg.norm(G,axis=1)**2;G2[G2==0]=np.inf
         nG=self.pdH.fft(density)
-        return 4*np.pi*self.pdH.ifft(nG/G2)
+        return -4*np.pi*self.pdH.ifft(nG/G2)
     
     def get_coloumb_potential(self,q):
         """
@@ -216,7 +208,7 @@ class TDDFT(object):
                 wavefunction=np.zeros((self.NK,self.nbands,self.nbands))
                 for k in range(self.NK):
                     wavefunction[k]=np.eye(self.nbands)
-            K=self.calc.get_bz_k_points();NK=K.shape[0]  
+            K=self.Full_BZ;NK=K.shape[0]  
             NG=self.pdF.get_reciprocal_vectors().shape[0]
             V=np.zeros((self.NK,NK,NG))
             for k in range(self.NK):
@@ -225,7 +217,7 @@ class TDDFT(object):
                     V[k,q]=self.get_coloumb_potential(kq)
 
             VF_matrix=Fock_matrix(VF_matrix,V,self.M.conj(),self.M,
-                                  self.calc.get_bz_to_ibz_map(),self.nvalence)
+                                  self.IBZ_map,self.nvalence)
         return VF_matrix/self.volume
     
     def get_LDA_exchange_matrix(self,wavefunction=None):
