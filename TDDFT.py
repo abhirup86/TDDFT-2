@@ -75,7 +75,6 @@ class TDDFT(object):
         self.icell=2.0 * np.pi * calc.wfs.gd.icell_cv # inverse cell 
         self.cell = calc.wfs.gd.cell_cv # cell
         self.r=calc.wfs.gd.get_grid_point_coordinates()
-        self.r[2]-=self.cell[2,2]/2.
         self.volume = np.abs(np.linalg.det(calc.wfs.gd.cell_cv)) # volume of cell
         self.norm=calc.wfs.gd.dv # 
         self.Fermi=calc.get_fermi_level()/Hartree #Fermi level
@@ -132,9 +131,9 @@ class TDDFT(object):
         for k in range(self.NK):
             self.wavefunction[k]=np.eye(self.nbands)
             self.Kinetic[k]=np.diag(self.EK[k])
-        self.VH0=self.fast_Hartree_matrix(self.wavefunction)
-        self.VLDAc0=self.fast_LDA_correlation_matrix(self.wavefunction)
-        self.VLDAx0=self.fast_LDA_exchange_matrix(self.wavefunction)
+        self.VH0=self.get_Hartree_matrix(self.wavefunction)
+        self.VLDAc0=self.get_LDA_correlation_matrix(self.wavefunction)
+        self.VLDAx0=self.get_LDA_exchange_matrix(self.wavefunction)
         
         self.Full_BZ=calc.get_bz_k_points()
         self.IBZ_map=calc.get_bz_to_ibz_map()
@@ -146,8 +145,7 @@ class TDDFT(object):
         """ 
         direction/=np.linalg.norm(direction)
         dipole=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        r=np.array(sum([self.r[i]*direction[i] for i in range(3)]))
-        dipole=operator_matrix_periodic(dipole,r,self.ukn.conj(),self.ukn)*self.norm
+        dipole=operator_matrix_periodic(dipole,self.r[2],self.ukn.conj(),self.ukn)*self.norm #!!!!!! no direction
         return dipole
     
     def get_density(self,wavefunction):
@@ -243,40 +241,40 @@ class TDDFT(object):
         return LDAc_matrix
     
     def occupation(self,wavefunction):
-        return 2*self.wk[:,None]*np.sum(self.f[:,None,:]*np.abs(wavefunction)**2,axis=2)
+        return 2*np.sum(self.wk[:,None,None]*self.f[:,None,:]*np.abs(wavefunction)**2,axis=2)
     
     def fast_Hartree_matrix(self,wavefunction):
-        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.Hartree_elements)
+        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.Hartree_elements)-self.VH0
     
     def fast_LDA_correlation_matrix(self,wavefunction):
-        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.LDAc_elements)
+        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.LDAc_elements)-self.VLDAc0
     
     def fast_LDA_exchange_matrix(self,wavefunction):
-        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.LDAx_elements)
+        return np.einsum('kn,knqij->qij',self.occupation(wavefunction),self.LDAx_elements)-self.VLDAx0
     
     def propagate(self,dt,steps,E,operator,corrections=10):
         self.wavefunction=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex) 
         for k in range(self.NK):
             self.wavefunction[k]=np.eye(self.nbands)
-        H=np.copy(self.Kinetic)
+        H=np.copy(self.Kinetic)+E[0]*self.dipole
         operator_macro=np.array([operator[k].diagonal() for k in range(self.NK)])
-        result=np.zeros((steps,self.nbands),dtype=np.complex)
         self.macro_dipole=np.zeros(steps,dtype=np.complex)
-        for t in tqdm(range(steps)):
+        for t in range(steps):
             wavefunction_next=np.copy(self.wavefunction)
-            for i in range(corrections):
+            error=np.inf
+            while error>1e-8:
+                wavefunction_check=np.copy(wavefunction_next)
                 H_next =self.Kinetic+E[t]*self.dipole
-                H_next+=self.fast_Hartree_matrix(wavefunction_next)-self.VH0
-                H_next+=self.fast_LDA_correlation_matrix(wavefunction_next)-self.VLDAc0
-                H_next+=self.fast_LDA_exchange_matrix(wavefunction_next)-self.VLDAx0
+                H_next+=self.fast_Hartree_matrix(wavefunction_next)
+#                 H_next+=self.fast_LDA_correlation_matrix(wavefunction_next)
+#                 H_next+=self.fast_LDA_exchange_matrix(wavefunction_next)
                 
                 H_mid = 0.5*(H + H_next) 
                 for k in range(self.NK):
                     H_left = np.eye(self.nbands)+0.5j*dt*H_mid[k]            
                     H_right= np.eye(self.nbands)-0.5j*dt*H_mid[k]
-                    wavefunction_next[k]=linalg.solve(H_left, H_right@wavefunction_next[k])  
-                self.wavefunction=np.copy(wavefunction_next)      
-                H = np.copy(H_next)
-            result[t]=np.sum(self.occupation(self.wavefunction),axis=0)
+                    wavefunction_next[k]=linalg.solve(H_left, H_right@self.wavefunction[k])  
+                error=np.abs(np.sum(wavefunction_next-wavefunction_check))
+            self.wavefunction=np.copy(wavefunction_next)      
+            H = np.copy(H_next)
             self.macro_dipole[t]=np.sum(self.occupation(self.wavefunction)*operator_macro)
-        return result
