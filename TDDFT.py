@@ -16,7 +16,7 @@ def operator_matrix_periodic(matrix,operator,wf_conj,wf):
     for k in numba.prange(NK):
         for n1 in range(nbands):
             for n2 in range(nbands):
-                matrix[k,n1,n2]=np.sum(operator*wf_conj[k,n1]*wf[k,n2])
+                matrix[k,n1,n2]=np.sum(operator[2:-1,2:-1,2:-1]*wf_conj[k,n1][2:-1,2:-1,2:-1]*wf[k,n2][2:-1,2:-1,2:-1])
     return matrix
 
 @numba.jit(nopython=True,parallel=True,fastmath=True)
@@ -46,6 +46,7 @@ class TDDFT(object):
     """
     
     def __init__(self,calc,nbands=None,Fock=False):
+        self.calc=calc
         self.Fock=Fock
         self.K=calc.get_ibz_k_points() # reduced Brillioun zone
         self.NK=self.K.shape[0] 
@@ -75,6 +76,8 @@ class TDDFT(object):
         self.icell=2.0 * np.pi * calc.wfs.gd.icell_cv # inverse cell 
         self.cell = calc.wfs.gd.cell_cv # cell
         self.r=calc.wfs.gd.get_grid_point_coordinates()
+        for i in range(3):
+            self.r[i]-=self.cell[i,i]/2.
         self.volume = np.abs(np.linalg.det(calc.wfs.gd.cell_cv)) # volume of cell
         self.norm=calc.wfs.gd.dv # 
         self.Fermi=calc.get_fermi_level()/Hartree #Fermi level
@@ -139,13 +142,14 @@ class TDDFT(object):
         self.IBZ_map=calc.get_bz_to_ibz_map()
     
     
-    def get_dipole_matrix(self,direction=[0,0,1]):
+    def get_dipole_matrix(self,direction=[1,0,0]):
         """ 
         return two-dimensional numpy complex array of dipole matrix elements(
         """ 
         direction/=np.linalg.norm(direction)
+        r=np.sum(direction[:,None,None,None]*self.r,axis=0)
         dipole=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
-        dipole=operator_matrix_periodic(dipole,self.r[2],self.ukn.conj(),self.ukn)*self.norm #!!!!!! no direction
+        dipole=operator_matrix_periodic(dipole,r,self.ukn.conj(),self.ukn)*self.norm #!!!!!! no direction
         return dipole
     
     def get_density(self,wavefunction):
@@ -259,15 +263,15 @@ class TDDFT(object):
         H=np.copy(self.Kinetic)+E[0]*self.dipole
         operator_macro=np.array([operator[k].diagonal() for k in range(self.NK)])
         self.macro_dipole=np.zeros(steps,dtype=np.complex)
-        for t in range(steps):
+        for t in tqdm(range(steps)):
             wavefunction_next=np.copy(self.wavefunction)
             error=np.inf
             while error>1e-8:
                 wavefunction_check=np.copy(wavefunction_next)
                 H_next =self.Kinetic+E[t]*self.dipole
                 H_next+=self.fast_Hartree_matrix(wavefunction_next)
-#                 H_next+=self.fast_LDA_correlation_matrix(wavefunction_next)
-#                 H_next+=self.fast_LDA_exchange_matrix(wavefunction_next)
+                H_next+=self.fast_LDA_correlation_matrix(wavefunction_next)
+                H_next+=self.fast_LDA_exchange_matrix(wavefunction_next)
                 
                 H_mid = 0.5*(H + H_next) 
                 for k in range(self.NK):
