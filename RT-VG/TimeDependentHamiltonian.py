@@ -156,7 +156,12 @@ class TimeDependentHamiltonian():
         self.Vloc=self.ham.vbar.pd.ifft(V)
         
     def update_density(self,wfn):
-        self.density[0]=np.einsum('qn,qmn,qmxyz->xyz',self.f_n,np.abs(wfn)**2,self.den_gs)
+        self.density[0]=np.zeros_like(self.density[0])
+        occ=np.abs(wfn)**2
+        for q in range(self.nq):
+            for n in range(self.nbands):
+                for m in range(self.nbands):
+                    self.density[0]+=self.f_n[q,n]*occ[q,n,m]*self.den_gs[q,m]
     
     def calculate_nonlocal(self,A):
         #calculation nonlocal part of Hamiltonian
@@ -171,8 +176,12 @@ class TimeDependentHamiltonian():
         return np.einsum('i,qni,qmi->qnm',self.V,proj.conj(),proj)
     
     def calculate_local(self):
-        #calculation local part of Hamiltonian
-        VL=np.einsum('xyz,qnxyz,qmxyz->qnm',self.Vloc+self.VXC+self.VH,self.psi_gs.conj(),self.psi_gs)*self.gd.dv
+        VL=np.zeros((self.nq,self.nbands,self.nbands),dtype=complex)
+        local_potential=self.Vloc+self.VXC+self.VH
+        for q in range(self.nq):
+            for n in range(self.nbands):
+                for m in range(self.nbands):
+                    VL[q,n,m]=np.sum(local_potential*self.psi_gs[q,n].conj()*self.psi_gs[q,m])*self.gd.dv
         return VL
     
     def calculate_kinetic(self):
@@ -191,14 +200,13 @@ class TimeDependentHamiltonian():
         I=self.calculate_interaction(A)
         return K+VL+VNL+I
     
-    def calculate_current(self,A,wfn):
+    def calculate_current(self,wfn):
 #         VNL=self.calculate_nonlocal(A)
 #         J=np.zeros((3,self.nq,self.nbands,self.nbands),dtype=complex)
 #         for i in range(3):
 #             for q in range(self.nq):
 #                 J[i,q]=np.dot(VNL[q],self.dipole[i,q])-np.dot(self.dipole[i,q],VNL[q])
-        J=self.momentum
-        current=np.einsum('iqnm,qb,qnb,qmb->i',J,self.f_n,wfn.conj(),wfn)
+        current=np.einsum('iqnm,qb,qnb,qmb->i',self.momentum,self.f_n,wfn.conj(),wfn)
 #         current+=self.nelectrons*A
         return current
         
