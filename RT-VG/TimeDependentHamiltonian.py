@@ -2,7 +2,50 @@ import numpy as np
 from gpaw.wavefunctions.pw import PWLFC
 from gpaw.utilities import unpack
 from gpaw.transformers import Transformer
-import pylibxc
+from itertools import product
+import numba
+
+    
+
+@numba.jit(nopython=True,parallel=True,fastmath=True)
+def fast_local(matrix,V,psi):
+    psi_conj=psi.conj()
+    nq=matrix.shape[0]
+    nbands=matrix.shape[1]
+    for q in numba.prange(nq):
+        for n in range(nbands):
+            for m in range(nbands):
+                matrix[q,n,m]=np.sum(psi_conj[q,n]*V*psi[q,m])
+    return matrix
+
+@numba.jit(nopython=True,parallel=True,fastmath=True)
+def fast_nonlocal(matrix,proj,
+                  V,psi,chi,phase,norm):
+    nq=psi.shape[0]
+    nbands=psi.shape[1]
+    norbs=chi.shape[1]
+    chi_conj=chi.conj()
+    for q in numba.prange(nq):
+        for n in range(nbands):
+            for o in range(norbs):
+                proj[q,n,o]=np.sum(chi_conj[q,o]*psi[q,n]*phase)*norm
+    proj_conj=proj.conj()
+    for q in numba.prange(nq):      
+        for n in range(nbands):
+            for m in range(nbands):
+                for o in range(norbs):
+                    matrix[q,n,m]+=V[o]*proj_conj[q,n,o]*proj[q,m,o]
+    return matrix
+
+@numba.jit(nopython=True,parallel=True,fastmath=True)
+def fast_density(matrix,f_n,occ,den):
+    nq=den.shape[0]
+    nbands=den.shape[1]
+    for q in numba.prange(nq):
+        for n in range(nbands):
+            for m in range(nbands):
+                matrix+=f_n[q,n]*occ[q,n,m]*den[q,m]
+    return matrix
 
 class TimeDependentHamiltonian():
     
@@ -91,9 +134,8 @@ class TimeDependentHamiltonian():
         
         #initialization local potenital from ground state density
         self.update_local_potential()
+        self.VNL0=self.calculate_nonlocal(A=0)
         
-        
-    
     def update_local_potential(self):
         
         #tranform density from coarse to fine grids
@@ -156,32 +198,24 @@ class TimeDependentHamiltonian():
         self.Vloc=self.ham.vbar.pd.ifft(V)
         
     def update_density(self,wfn):
-        self.density[0]=np.zeros_like(self.density[0])
+        matrix=np.zeros_like(self.density[0])
         occ=np.abs(wfn)**2
-        for q in range(self.nq):
-            for n in range(self.nbands):
-                for m in range(self.nbands):
-                    self.density[0]+=self.f_n[q,n]*occ[q,n,m]*self.den_gs[q,m]
-    
+        self.density[0]=fast_density(matrix,self.f_n,occ,self.den_gs)
+  
     def calculate_nonlocal(self,A):
         #calculation nonlocal part of Hamiltonian
         #with gauge transform according to vector potential A
         phase=np.exp(1j*self.r*A)
+        VNL=np.zeros((self.nq,self.nbands,self.nbands),dtype=complex)
         proj=np.zeros((self.nq,self.nbands,self.norb),dtype=complex)
-        for q in range(self.nq):
-            for n in range(self.nbands):
-                for o in range(self.norb):
-                    proj[q,n,o]=self.gd.integrate(self.chi[q,o],self.psi_gs[q,n]*phase)
-                    
-        return np.einsum('i,qni,qmi->qnm',self.V,proj.conj(),proj)
+        VNL=fast_nonlocal(VNL,proj,self.V,self.psi_gs,self.chi,phase,self.gd.dv)                    
+        return VNL
     
     def calculate_local(self):
         VL=np.zeros((self.nq,self.nbands,self.nbands),dtype=complex)
-        local_potential=self.Vloc+self.VXC+self.VH
-        for q in range(self.nq):
-            for n in range(self.nbands):
-                for m in range(self.nbands):
-                    VL[q,n,m]=np.sum(local_potential*self.psi_gs[q,n].conj()*self.psi_gs[q,m])*self.gd.dv
+        potential=self.Vloc+self.VXC+self.VH
+        VL=fast_local(VL,potential,self.psi_gs)
+        VL*=self.gd.dv
         return VL
     
     def calculate_kinetic(self):
@@ -196,9 +230,12 @@ class TimeDependentHamiltonian():
         #Hamiltonian calculation 
         K=self.calculate_kinetic()
         VL=self.calculate_local()
-        VNL=self.calculate_nonlocal(A)
-        I=self.calculate_interaction(A)
-        return K+VL+VNL+I
+        if A==0:
+            return K+VL+self.VNL0
+        else:
+            VNL=self.calculate_nonlocal(A)
+            I=self.calculate_interaction(A)
+            return K+VL+VNL+I
     
     def calculate_current(self,wfn):
 #         VNL=self.calculate_nonlocal(A)
