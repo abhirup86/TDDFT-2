@@ -10,33 +10,38 @@ from gpaw.utilities import unpack
 from numpy.linalg import solve
 from gpaw.mixer import DummyMixer
 
-@numba.jit(nopython=True,parallel=True,fastmath=True)
+def smooth(t,dt,steps):
+    return 1.-3.*(t/(steps*dt))**2+2.*(t/(steps*dt))**3
+
+@numba.njit(parallel=True)
 def iteration(nq,dt,H,I,wfn):
-    for q in numba.prange(nq):
-        H_left =I+0.5j*dt*H[q]
-        H_right=I-0.5j*dt*H[q]
-        wfn[q]=solve(H_left, np.dot(H_right,wfn[q]))
+    num_proc=6
+    for i in numba.prange(num_proc):
+        for q in range(i,nq,num_proc):
+            H_left =I+0.5j*dt*H[q]
+            H_right=I-0.5j*dt*H[q]
+            wfn[q]=solve(H_left, np.dot(H_right,wfn[q]))
     return wfn
 
 class TDSE(object):
     def __init__(self,calc):
         self.calc=calc
         self.wfs=self.calc.wfs
-        self.NK=len(calc.wfs.kpt_u)
+        self.nq=len(calc.wfs.kpt_u)
         self.nbands=calc.get_number_of_bands()
-        self.E=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
+        self.E=np.zeros((self.nq,self.nbands,self.nbands),dtype=np.complex)
         self.norm=calc.wfs.gd.dv
         self.volume=np.abs(np.linalg.det(calc.wfs.gd.cell_cv)) 
-        self.fqn=np.zeros((self.NK,self.nbands))
-        for q in range(self.NK):
+        self.fqn=np.zeros((self.nq,self.nbands))
+        for q in range(self.nq):
             kpt=calc.wfs.kpt_u[q]
             self.fqn[q]=kpt.f_n
             self.E[q]=np.diag(kpt.eps_n)
         self.get_momentum_matrix()
         
     def get_momentum_matrix(self):
-        self.momentum=np.zeros((3,self.NK,self.nbands,self.nbands),dtype=np.complex)
-        for q in range(self.NK):
+        self.momentum=np.zeros((3,self.nq,self.nbands,self.nbands),dtype=np.complex)
+        for q in range(self.nq):
             kpt = self.calc.wfs.kpt_u[q]
             G=self.wfs.pd.get_reciprocal_vectors(q=kpt.q,add_q=False)
             for n in range(self.nbands):
@@ -49,30 +54,37 @@ class TDSE(object):
         return np.einsum('qn,qin,qjn,dqij->d',self.fqn,self.wfn.conj(),self.wfn,self.momentum)
     
     def linear_response(self,dt,steps,A0=[0,0,1e-5]):
+        self.occupation=np.zeros((steps,self.nq,self.nbands))
         self.A0=A0
         self.J=np.zeros((steps,3),dtype=np.complex)
         
         I=np.eye(self.nbands)
         H=self.E+np.einsum('iqnm,i->qnm',self.momentum,A0)+I*np.linalg.norm(A0)**2
-        self.wfn=np.zeros((self.NK,self.nbands,self.nbands),dtype=np.complex)
+        self.wfn=np.zeros((self.nq,self.nbands,self.nbands),dtype=np.complex)
         
-        for q in range(self.NK):
+        for q in range(self.nq):
             E,D=np.linalg.eigh(H[q])
             self.wfn[q]=D
             
         for t in tqdm(range(steps)):
             self.J[t]=self.current()
-            self.wfn=iteration(self.NK,dt,self.E,I,self.wfn)
+            self.occupation[t]=np.einsum('qn,qin->qn',self.fqn,np.abs(self.wfn)**2)
+            self.wfn=iteration(self.nq,dt,self.E,I,self.wfn)
             
-        J=self.J[:,2]/self.volume
-        time=np.arange(J.size)*dt
-        freq = np.fft.fftfreq(J.size, d=dt)
-        freq=np.sort(freq);freq=freq[np.abs(freq)<10]
-        sigma=np.zeros(freq.size,dtype=complex)
-        for w in range(freq.size):
-            sigma[w]=np.trapz(J*np.exp(1j*freq[w]*time),time)
-        sigma=-sigma/A0[2]
-        epsilon=1+4*np.pi*1j*sigma/freq
+            
+        self.J=self.J/self.volume
+        time=np.arange(steps)*dt
+        freq = np.fft.fftfreq(steps, d=dt)
+        freq=np.sort(freq)
+        sigma=np.zeros((3,3,freq.size),dtype=complex)
+        for i in range(3):
+            sigma_=np.zeros(freq.size,dtype=complex)
+            for w in range(freq.size):
+                sigma_[w]=np.trapz(self.J[:,i]*np.exp(1j*freq[w]*time)*smooth(time,steps,dt),time)
+            for j in range(3):
+                if A0[j]!=0:
+                    sigma[i,j]=-sigma_/A0[j]
+        epsilon=1+4*np.pi*1j*sigma/freq[None,None,:]
         return epsilon,freq
         
         

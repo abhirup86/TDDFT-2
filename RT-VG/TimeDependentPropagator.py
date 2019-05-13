@@ -10,6 +10,8 @@ def iteration(nq,dt,H,I,wfn,wfn_next):
         H_right=I-0.5j*dt*H[q]
         wfn_next[q]=solve(H_left, np.dot(H_right,wfn[q]))
     return wfn_next
+def smooth(t,dt,steps):
+    return 1.-3.*(t/(steps*dt))**2+2.*(t/(steps*dt))**3
 
 
 class TimeDependentPropagator():
@@ -19,7 +21,7 @@ class TimeDependentPropagator():
         self.nq=TDH.nq
         self.nbands=TDH.nbands
         
-    def linear_response(self,dt,steps,A0=1e-5,NSCsteps=3):
+    def linear_response(self,dt,steps,A0=[1e-5,0,0],NSCsteps=3):
         
         self.A0=A0
         self.J=np.zeros((steps,3),dtype=np.complex)
@@ -44,16 +46,20 @@ class TimeDependentPropagator():
             wfn=np.copy(wfn_next)            
             H = np.copy(H_next)
             
-        self.J/=self.volume
-        J=self.J[:,2]
+        self.J=self.J/self.volume
         time=np.arange(steps)*dt
         freq = np.fft.fftfreq(steps, d=dt)
-        freq=np.sort(freq);freq=freq[np.abs(freq)<10]
-        sigma=np.zeros(freq.size,dtype=complex)
-        for w in range(freq.size):
-            sigma[w]=np.trapz(J*np.exp(1j*freq[w]*time),time)
-        sigma=-sigma/A0
-        epsilon=1+4*np.pi*1j*sigma/freq
+        freq=np.sort(freq)
+        sigma=np.zeros((3,3,freq.size),dtype=complex)
+        for i in range(3):
+            sigma_=np.zeros(freq.size,dtype=complex)
+            for w in range(freq.size):
+                sigma_[w]=np.trapz(self.J[:,i]*np.exp(1j*freq[w]*time)*smooth(time,steps,dt),time)
+            for j in range(3):
+                if A0[j]!=0:
+                    sigma[i,j]=-sigma_/A0[j]
+        epsilon=1+4*np.pi*1j*sigma/freq[None,None,:]
+        
         return epsilon,freq
         
     def propagate(self,A,steps,dt,NSCsteps=3):
