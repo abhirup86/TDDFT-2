@@ -129,8 +129,9 @@ class TimeDependentHamiltonian():
 #----------------------------------------------------------------------------------------------------          
     def update_density(self,wfn):
         self.density[0]=np.zeros_like(self.density[0])
-        fast_density(self.density[0],self.f_n,wfn,self.den_gs)
-        self.occupation=np.einsum('qnm,qn->qm',np.abs(wfn)**2,self.f_n)                
+        fast_density(self.density[0],wfn,self.den_gs)
+        self.occupation=np.sum(np.abs(wfn)**2,axis=2)
+        self.update_local_potential()
         
 #---------------------------------------------------------------------------------------------------- 
     def update_gauge(self,A):
@@ -143,7 +144,7 @@ class TimeDependentHamiltonian():
         self.interaction=np.einsum('i,iqnm->qnm',A,self.local_moment)+0.5*np.linalg.norm(A)**2*self.overlap
         
         #calculation nonlocal momentum operator
-        # I_NL=[r,V_NL]=sum_o V_o (r|chi_o><chi_o - |chi_o><chi_o|r)
+        # I_NL=-i[r,V_NL]=-i sum_o V_o (r|chi_o><chi_o - |chi_o><chi_o|r)
         for i in range(3):
             fast_projections(self.proj_r[0],self.chi,self.r[i]*phase,self.psi_gs,self.gd.dv)
         self.nonlocal_moment =-1j*(np.einsum('o,iqno,qmo->iqnm',self.V,self.proj_r.conj(),self.proj)-
@@ -160,7 +161,7 @@ class TimeDependentHamiltonian():
         VXC=np.zeros_like(density)
         self.ham.xc.calculate(self.pd0.gd,density,VXC)
           
-#         calculate Hartree potential
+        # calculate Hartree potential
         charge_density=density+self.ion_density
         VH=4*np.pi*self.pd0.fft(charge_density)/self.G2
         VH=self.pd0.ifft(VH)
@@ -192,7 +193,7 @@ class TimeDependentHamiltonian():
     
 #----------------------------------------------------------------------------------------------------    
     def calculate_current(self,wfn):
-        return np.einsum('iqnm,qb,qnb,qmb->i',self.moment,self.f_n,wfn.conj(),wfn)/self.volume
+        return np.einsum('iqnm,qne,qme->i',self.moment,wfn.conj(),wfn)/self.volume/self.nq
         
         
        

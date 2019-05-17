@@ -20,25 +20,34 @@ class TimeDependentPropagator():
         self.TDH=TDH
         self.nq=TDH.nq
         self.nbands=TDH.nbands
+        self.ne=int(TDH.calc.get_number_of_electrons()/2)
         
-    def linear_response(self,dt,steps,A0=[1e-5,0,0],NSCsteps=3):
+    def linear_response(self,dt,steps,A0=[1e-5,0,0],NSCsteps=3,NSC=10):
         
         self.J=np.zeros((steps,3),dtype=np.complex)
+        self.occ=np.zeros((steps,self.nq,self.nbands))
         I=np.eye(self.nbands)
 
         #calculation start wavefunctions
-        wfn=np.zeros((self.nq,self.nbands,self.nbands),dtype=np.complex)
+        wfn=np.zeros((self.nq,self.nbands,self.ne),dtype=np.complex)
+        
         self.TDH.update_gauge(A0)
-        H=self.TDH.hamiltonian()
-        for q in range(self.nq):
-            E,D=np.linalg.eigh(H[q])
-            wfn[q]=D
+        for i in range(NSC):
+            H=self.TDH.hamiltonian()
+            for q in range(self.nq):
+                E,D=np.linalg.eigh(H[q])
+                wfn[q]=D[:,:self.ne]
+            self.TDH.update_density(wfn)
+   
         self.TDH.update_gauge([0,0,0])
         H=self.TDH.hamiltonian()
         
         #time propagation
         for t in tqdm(range(steps)):
+            
             self.J[t]=self.TDH.calculate_current(wfn)
+            self.occ[t]=self.TDH.occupation
+            
             wfn_next=np.copy(wfn)
             for i in range(NSCsteps):
                 self.TDH.update_density(wfn_next)
